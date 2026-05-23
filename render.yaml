@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: x-autopost-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: CONSUMER_KEY
+        sync: false
+      - key: CONSUMER_SECRET
+        sync: false
+      - key: ACCESS_TOKEN
+        sync: false
+      - key: ACCESS_TOKEN_SECRET
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
