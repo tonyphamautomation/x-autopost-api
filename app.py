@@ -19,18 +19,30 @@ def refresh_access_token():
         return None
 
     try:
-        auth = (client_id, client_secret) if client_secret else None
-        resp = http_requests.post(
-            "https://api.twitter.com/2/oauth2/token",
-            auth=auth,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=15,
-        )
+        if client_secret:
+            # Confidential client: Basic Auth only, no client_id in body
+            resp = http_requests.post(
+                "https://api.twitter.com/2/oauth2/token",
+                auth=(client_id, client_secret),
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+        else:
+            # Public client (PKCE): client_id in body, no Basic Auth
+            resp = http_requests.post(
+                "https://api.twitter.com/2/oauth2/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
         if resp.ok:
             data = resp.json()
             _token_cache["access_token"] = data["access_token"]
