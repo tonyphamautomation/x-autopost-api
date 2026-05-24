@@ -10,7 +10,8 @@ _token_cache = {"access_token": None, "expires_at": 0}
 
 
 def refresh_access_token():
-    """Use refresh token to get a new OAuth 2.0 access token."""
+    """Use refresh token to get a new OAuth 2.0 access token.
+    Tries public client (PKCE style) first, then confidential client."""
     refresh_token = os.environ.get("OAUTH2_REFRESH_TOKEN", "")
     client_id = os.environ.get("CLIENT_ID", "")
     client_secret = os.environ.get("CLIENT_SECRET", "")
@@ -18,9 +19,35 @@ def refresh_access_token():
     if not refresh_token or not client_id:
         return None
 
+    # Try 1: Public client style (client_id in body, no Basic Auth)
+    # This is how Twitter Developer Portal generates tokens
     try:
-        if client_secret:
-            # Confidential client: Basic Auth only, no client_id in body
+        resp = http_requests.post(
+            "https://api.twitter.com/2/oauth2/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        if resp.ok:
+            data = resp.json()
+            _token_cache["access_token"] = data["access_token"]
+            _token_cache["expires_at"] = time.time() + data.get("expires_in", 7200)
+            if "refresh_token" in data:
+                os.environ["OAUTH2_REFRESH_TOKEN"] = data["refresh_token"]
+            app.logger.info("Token refreshed via public client")
+            return _token_cache["access_token"]
+        else:
+            app.logger.warning(f"Public client refresh failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        app.logger.error(f"Public client refresh exception: {e}")
+
+    # Try 2: Confidential client style (Basic Auth)
+    if client_secret:
+        try:
             resp = http_requests.post(
                 "https://api.twitter.com/2/oauth2/token",
                 auth=(client_id, client_secret),
@@ -31,29 +58,19 @@ def refresh_access_token():
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=15,
             )
-        else:
-            # Public client (PKCE): client_id in body, no Basic Auth
-            resp = http_requests.post(
-                "https://api.twitter.com/2/oauth2/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=15,
-            )
-        if resp.ok:
-            data = resp.json()
-            _token_cache["access_token"] = data["access_token"]
-            _token_cache["expires_at"] = time.time() + data.get("expires_in", 7200)
-            if "refresh_token" in data:
-                os.environ["OAUTH2_REFRESH_TOKEN"] = data["refresh_token"]
-            return _token_cache["access_token"]
-        else:
-            app.logger.error(f"Token refresh failed: {resp.status_code} {resp.text}")
-    except Exception as e:
-        app.logger.error(f"Token refresh exception: {e}")
+            if resp.ok:
+                data = resp.json()
+                _token_cache["access_token"] = data["access_token"]
+                _token_cache["expires_at"] = time.time() + data.get("expires_in", 7200)
+                if "refresh_token" in data:
+                    os.environ["OAUTH2_REFRESH_TOKEN"] = data["refresh_token"]
+                app.logger.info("Token refreshed via confidential client")
+                return _token_cache["access_token"]
+            else:
+                app.logger.error(f"Confidential client refresh failed: {resp.status_code} {resp.text}")
+        except Exception as e:
+            app.logger.error(f"Confidential client refresh exception: {e}")
+
     return None
 
 
