@@ -1,22 +1,68 @@
 from flask import Flask, request, jsonify
 import tweepy
 import os
+import requests as http_requests
+import time
 
 app = Flask(__name__)
+
+# In-memory token cache
+_token_cache = {"access_token": None, "expires_at": 0}
+
+
+def refresh_access_token():
+    """Use refresh token to get a new OAuth 2.0 access token."""
+    refresh_token = os.environ.get("OAUTH2_REFRESH_TOKEN", "")
+    client_id = os.environ.get("CLIENT_ID", "")
+    client_secret = os.environ.get("CLIENT_SECRET", "")
+
+    if not refresh_token or not client_id:
+        return None
+
+    try:
+        auth = (client_id, client_secret) if client_secret else None
+        resp = http_requests.post(
+            "https://api.twitter.com/2/oauth2/token",
+            auth=auth,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        if resp.ok:
+            data = resp.json()
+            _token_cache["access_token"] = data["access_token"]
+            _token_cache["expires_at"] = time.time() + data.get("expires_in", 7200)
+            if "refresh_token" in data:
+                os.environ["OAUTH2_REFRESH_TOKEN"] = data["refresh_token"]
+            return _token_cache["access_token"]
+        else:
+            app.logger.error(f"Token refresh failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        app.logger.error(f"Token refresh exception: {e}")
+    return None
+
+
+def get_access_token():
+    """Get a valid OAuth 2.0 access token, refreshing if needed."""
+    if _token_cache["access_token"] and time.time() < _token_cache["expires_at"] - 300:
+        return _token_cache["access_token"]
+    return refresh_access_token()
+
+
+def get_client():
+    """Twitter API v2 client using OAuth 2.0 User Context."""
+    token = get_access_token()
+    if not token:
+        raise ValueError("No valid OAuth 2.0 access token available")
+    return tweepy.Client(access_token=token)
 
 
 def check_auth(req):
     return req.headers.get("X-Webhook-Secret") == os.environ.get("WEBHOOK_SECRET", "")
-
-
-def get_client():
-    """Twitter API v2 client (OAuth 1.0a User Context) - requires Read+Write app permissions."""
-    return tweepy.Client(
-        consumer_key=os.environ["CONSUMER_KEY"],
-        consumer_secret=os.environ["CONSUMER_SECRET"],
-        access_token=os.environ["ACCESS_TOKEN"],
-        access_token_secret=os.environ["ACCESS_TOKEN_SECRET"],
-    )
 
 
 @app.route("/tweet", methods=["POST"])
