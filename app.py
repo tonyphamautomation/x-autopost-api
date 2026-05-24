@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import tweepy
 import os
 import requests as http_requests
 import time
@@ -53,14 +52,6 @@ def get_access_token():
     return refresh_access_token()
 
 
-def get_client():
-    """Twitter API v2 client using OAuth 2.0 User Context."""
-    token = get_access_token()
-    if not token:
-        raise ValueError("No valid OAuth 2.0 access token available")
-    return tweepy.Client(access_token=token)
-
-
 def check_auth(req):
     return req.headers.get("X-Webhook-Secret") == os.environ.get("WEBHOOK_SECRET", "")
 
@@ -79,16 +70,27 @@ def post_tweet():
     if len(text) > 280:
         text = text[:277] + "..."
 
+    token = get_access_token()
+    if not token:
+        return jsonify({"error": "Could not obtain OAuth 2.0 access token"}), 500
+
     try:
-        client = get_client()
-        response = client.create_tweet(text=text)
-        tweet_id = str(response.data["id"])
-        tweet_url = f"https://x.com/i/web/status/{tweet_id}"
-        return jsonify({"success": True, "tweet_id": tweet_id, "url": tweet_url}), 200
-    except tweepy.errors.Forbidden as e:
-        return jsonify({"error": f"Forbidden: {str(e)}"}), 403
-    except tweepy.errors.TweepyException as e:
-        return jsonify({"error": f"Twitter error: {str(e)}"}), 500
+        resp = http_requests.post(
+            "https://api.twitter.com/2/tweets",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"text": text},
+            timeout=30,
+        )
+        if resp.status_code == 201:
+            tweet_data = resp.json().get("data", {})
+            tweet_id = str(tweet_data.get("id", ""))
+            tweet_url = f"https://x.com/i/web/status/{tweet_id}"
+            return jsonify({"success": True, "tweet_id": tweet_id, "url": tweet_url}), 200
+        else:
+            return jsonify({"error": f"Twitter API {resp.status_code}: {resp.text}"}), resp.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
